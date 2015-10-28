@@ -36,29 +36,29 @@ RUN adduser --system --group --no-create-home druid \
       && chown druid:druid /var/lib/druid
 
 # Pre-cache Druid dependencies (this step is optional, but can help speed up re-building the Docker image)
-#RUN mvn dependency:get -Dartifact=io.druid:druid-services:0.7.2
+RUN mvn dependency:get -Dartifact=io.druid:druid-services:0.7.2
 
 # Druid (release tarball)
-ENV DRUID_VERSION 0.8.1
-RUN wget -q -O - http://static.druid.io/artifacts/releases/druid-$DRUID_VERSION-bin.tar.gz | tar -xzf - -C /usr/local
-RUN ln -s /usr/local/druid-services-$DRUID_VERSION /usr/local/druid
+#ENV DRUID_VERSION 0.7.1.1
+#RUN wget -q -O - http://static.druid.io/artifacts/releases/druid-services-$DRUID_VERSION-bin.tar.gz | tar -xzf - -C /usr/local
+#RUN ln -s /usr/local/druid-services-$DRUID_VERSION /usr/local/druid
 
 # Druid (from source)
-#RUN mkdir -p /usr/local/druid/lib /usr/local/druid/repository
+RUN mkdir -p /usr/local/druid/lib /usr/local/druid/repository
 # whichever github owner (user or org name) you would like to build from
-#ENV GITHUB_OWNER druid-io
+ENV GITHUB_OWNER druid-io
 # whichever branch you would like to build
-#ENV DRUID_VERSION master
+ENV DRUID_VERSION 0.8.1
 
 # trigger rebuild only if branch changed
-#ADD https://api.github.com/repos/$GITHUB_OWNER/druid/git/refs/heads/$DRUID_VERSION druid-version.json
-#RUN git clone -q --branch $DRUID_VERSION --depth 1 https://github.com/$GITHUB_OWNER/druid.git /tmp/druid
-#WORKDIR /tmp/druid
+ADD https://api.github.com/repos/$GITHUB_OWNER/druid/git/refs/heads/$DRUID_VERSION druid-version.json
+RUN git clone -q --branch $DRUID_VERSION --depth 1 https://github.com/$GITHUB_OWNER/druid.git /tmp/druid
+WORKDIR /tmp/druid
 # package and install Druid locally
 # use versions-maven-plugin 2.1 to work around https://jira.codehaus.org/browse/MVERSIONS-285
-#RUN mvn -U -B org.codehaus.mojo:versions-maven-plugin:2.1:set -DgenerateBackupPoms=false -DnewVersion=$DRUID_VERSION \
-#  && mvn -U -B clean install -DskipTests=true -Dmaven.javadoc.skip=true \
-#  && cp services/target/druid-services-$DRUID_VERSION-selfcontained.jar /usr/local/druid/lib
+RUN mvn -U -B org.codehaus.mojo:versions-maven-plugin:2.1:set -DgenerateBackupPoms=false -DnewVersion=$DRUID_VERSION \
+  && mvn -U -B clean install -DskipTests=true -Dmaven.javadoc.skip=true \
+  && cp services/target/druid-services-$DRUID_VERSION-selfcontained.jar /usr/local/druid/lib
 
 # pull dependencies for Druid extensions
 RUN java "-Ddruid.extensions.coordinates=[\"io.druid.extensions:druid-s3-extensions\",\"io.druid.extensions:mysql-metadata-storage\"]" \
@@ -66,23 +66,17 @@ RUN java "-Ddruid.extensions.coordinates=[\"io.druid.extensions:druid-s3-extensi
       -Ddruid.extensions.remoteRepositories=[\"file:///root/.m2/repository/\",\"https://repo1.maven.org/maven2/\"] \
       -cp /usr/local/druid/lib/* \
       io.druid.cli.Main tools pull-deps
-
 WORKDIR /
-
 # Setup metadata store
 RUN /etc/init.d/mysql start && mysql -u root -e "GRANT ALL ON druid.* TO 'druid'@'localhost' IDENTIFIED BY 'diurd'; CREATE database druid CHARACTER SET utf8;" && /etc/init.d/mysql stop
-
 # Add sample data
 RUN /etc/init.d/mysql start && java -cp /usr/local/druid/lib/druid-services-*-selfcontained.jar -Ddruid.extensions.coordinates=[\"io.druid.extensions:mysql-metadata-storage\"] -Ddruid.metadata.storage.type=mysql io.druid.cli.Main tools metadata-init --connectURI="jdbc:mysql://localhost:3306/druid" --user=druid --password=diurd && /etc/init.d/mysql stop
 ADD sample-data.sql sample-data.sql
 RUN /etc/init.d/mysql start && cat sample-data.sql | mysql -u root druid && /etc/init.d/mysql stop
-
 # Setup supervisord
 ADD supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-
 # Clean up
 RUN apt-get clean && rm -rf /tmp/* /var/tmp/*
-
 # Expose ports:
 # - 8081: HTTP (coordinator)
 # - 8082: HTTP (broker)
@@ -94,6 +88,5 @@ EXPOSE 8082
 EXPOSE 8083
 EXPOSE 3306
 EXPOSE 2181 2888 3888
-
 WORKDIR /var/lib/druid
 ENTRYPOINT export HOSTIP="$(resolveip -s $HOSTNAME)" && exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
